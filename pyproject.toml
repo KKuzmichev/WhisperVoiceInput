@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "whisper-voice-input"
+version = "0.1.0"
+description = "Push-to-talk голосовой ввод через faster-whisper"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+dependencies = [
+    "faster-whisper>=1.0.0",
+    "pynput>=1.7.6",
+    "sounddevice>=0.4.6",
+    "soundfile>=0.12",
+    "numpy>=1.24",
+    "huggingface-hub>=0.20",
+    "rumps>=0.4.0; sys_platform=='darwin'",
+]
+
+[project.optional-dependencies]
+menubar = ["rumps>=0.4.0; sys_platform=='darwin'"]
+diarize = [
+    "speechbrain>=0.5.13",
+    "torch>=2.0",
+    "torchaudio>=2.0",
+    "scikit-learn>=1.0",
+]
+
+[project.scripts]
+voiceinput = "whisper_voice_input.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
