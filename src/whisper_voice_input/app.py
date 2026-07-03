@@ -132,31 +132,107 @@ class VoiceInputApp:
 
     @staticmethod
     def _load_audio_file(path):
+        import subprocess
+        import tempfile
+        from pathlib import Path
+
         try:
             import soundfile as sf
         except ImportError:
+            sf = None
+
+        if sf is not None:
+            try:
+                audio, sr = sf.read(str(path), dtype="float32")
+                if audio.ndim > 1:
+                    audio = audio.mean(axis=1)
+                if sr != 16000:
+                    try:
+                        import librosa
+                        audio = librosa.resample(audio, orig_sr=sr, target_sr=16000)
+                    except ImportError:
+                        print(
+                            f"Частота аудио {sr} Гц, нужно 16000. "
+                            "Установите librosa: pip install librosa",
+                            file=sys.stderr,
+                        )
+                        sys.exit(1)
+                return audio
+            except Exception:
+                pass
+
+        try:
+            import imageio_ffmpeg
+        except ImportError:
             print(
-                "Для транскрипции файла нужен soundfile: pip install soundfile",
+                "Формат файла не поддерживается soundfile. "
+                "Установите extra: pip install -e .[video]",
                 file=sys.stderr,
             )
             sys.exit(1)
-        audio, sr = sf.read(str(path), dtype="float32")
-        if audio.ndim > 1:
-            audio = audio.mean(axis=1)
-        if sr != 16000:
-            try:
-                import librosa
-                audio = librosa.resample(audio, orig_sr=sr, target_sr=16000)
-            except ImportError:
-                print(
-                    f"Частота аудио {sr} Гц, нужно 16000. "
-                    "Установите librosa: pip install librosa",
-                    file=sys.stderr,
-                )
-                sys.exit(1)
-        return audio
 
-    def transcribe_file(self, input_path, output_path=None):
+        ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+        tmp_wav = Path(tempfile.mkdtemp()) / "audio.wav"
+        subprocess.run(
+            [ffmpeg, "-y", "-i", str(path), "-vn", "-ac", "1",
+             "-ar", "16000", "-f", "wav", str(tmp_wav)],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+        )
+        try:
+            if sf is not None:
+                audio, _ = sf.read(str(tmp_wav), dtype="float32")
+                if audio.ndim > 1:
+                    audio = audio.mean(axis=1)
+                return audio
+            import wave
+            with wave.open(str(tmp_wav), "rb") as wf:
+                frames = wf.readframes(wf.getnframes())
+                audio = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
+            return audio
+        finally:
+            tmp_wav.unlink(missing_ok=True)
+            try:
+                tmp_wav.parent.rmdir()
+            except OSError:
+                pass
+
+    @staticmethod
+    def _format_timestamp(seconds):
+        h = int(seconds // 3600)
+        m = int((seconds % 3600) // 60)
+        s = int(seconds % 60)
+        ms = int((seconds - int(seconds)) * 1000)
+        return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+    def _segments_to_text(self, segments, with_timeline, tagged=None):
+        if tagged is not None:
+            if with_timeline:
+                lines = []
+                for (speaker, text), seg in zip(tagged, segments):
+                    if text:
+                        lines.append(
+                            f"[{self._format_timestamp(seg.start)}] "
+                            f"Speaker {speaker + 1}: {text.strip()}"
+                        )
+                return "\n".join(lines)
+            n_speakers = self.diarizer.num_speakers(tagged) if tagged else 0
+            if n_speakers <= 1:
+                return "".join(t for _, t in tagged).strip()
+            grouped = self._merge_adjacent_speakers(tagged)
+            return "\n".join(f"Speaker {s + 1}: {t}" for s, t in grouped)
+        if with_timeline:
+            lines = []
+            for seg in segments:
+                if seg.text.strip():
+                    lines.append(
+                        f"[{self._format_timestamp(seg.start)}] {seg.text.strip()}"
+                    )
+            return "\n".join(lines)
+        return "".join(seg.text for seg in segments).strip()
+
+    def transcribe_file(self, input_path, output_path=None, with_timeline=False):
         input_path = Path(input_path).expanduser().resolve()
         if not input_path.is_file():
             print(f"Файл не найден: {input_path}", file=sys.stderr)
@@ -169,26 +245,25 @@ class VoiceInputApp:
 
         print(f"Загрузка аудио: {input_path}")
         audio = self._load_audio_file(input_path)
+        duration = len(audio) / self.config["sample_rate"]
+        print(f"Длительность: {duration:.1f}с")
 
         use_diarize = self.diarizer is not None
+        print("Транскрипция началась...")
         segments, info = self.model.transcribe(
             audio,
             language=self.config["language"],
             beam_size=5,
             vad_filter=use_diarize,
+            log_progress=True,
         )
         segments = list(segments)
 
+        tagged = None
         if use_diarize and segments:
             tagged = self.diarizer.diarize(audio, segments)
-            n_speakers = self.diarizer.num_speakers(tagged) if tagged else 0
-            if n_speakers <= 1:
-                text = "".join(t for _, t in tagged).strip()
-            else:
-                grouped = self._merge_adjacent_speakers(tagged)
-                text = "\n".join(f"Speaker {s + 1}: {t}" for s, t in grouped)
-        else:
-            text = "".join(seg.text for seg in segments).strip()
+
+        text = self._segments_to_text(segments, with_timeline, tagged)
 
         if output_path is None:
             output_path = input_path.with_suffix(".txt")
@@ -201,9 +276,86 @@ class VoiceInputApp:
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         output_path.write_text(text, encoding="utf-8")
-        print(f"Распознано ({len(segments)} сегм., {info.duration:.1f}с):")
-        print(text)
-        print(f"\nСохранено в: {output_path}")
+        if self.config.get("debug"):
+            print(f"Распознано ({len(segments)} сегм., {info.duration:.1f}с):")
+            print(text)
+        print(f"Сохранено в: {output_path}")
+
+    def transcribe_video(self, input_path, output_path=None, with_timeline=True):
+        import tempfile
+
+        try:
+            import imageio_ffmpeg
+        except ImportError:
+            print(
+                "Для транскрипции видео нужен imageio-ffmpeg: "
+                "pip install -e .[video]",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        input_path = Path(input_path).expanduser().resolve()
+        if not input_path.is_file():
+            print(f"Файл не найден: {input_path}", file=sys.stderr)
+            sys.exit(1)
+
+        if self.model is None:
+            self.load_model()
+        if self.config.get("diarize") and self.diarizer is None:
+            self._load_diarizer()
+
+        ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+        print(f"Извлечение аудио из видео: {input_path}")
+        tmp_wav = Path(tempfile.mkdtemp()) / "audio.wav"
+        import subprocess
+
+        subprocess.run(
+            [ffmpeg, "-y", "-i", str(input_path), "-vn", "-ac", "1",
+             "-ar", "16000", "-f", "wav", str(tmp_wav)],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+        )
+
+        try:
+            audio = self._load_audio_file(tmp_wav)
+        finally:
+            tmp_wav.unlink(missing_ok=True)
+
+        use_diarize = self.diarizer is not None
+        print("Транскрипция началась...")
+        segments, info = self.model.transcribe(
+            audio,
+            language=self.config["language"],
+            beam_size=5,
+            vad_filter=use_diarize,
+            log_progress=True,
+        )
+        segments = list(segments)
+        sys.stdout.write("\r\033[K")
+        sys.stdout.flush()
+
+        tagged = None
+        if use_diarize and segments:
+            tagged = self.diarizer.diarize(audio, segments)
+
+        text = self._segments_to_text(segments, with_timeline, tagged)
+
+        if output_path is None:
+            output_path = input_path.with_suffix(".txt")
+        else:
+            output_path = Path(output_path).expanduser()
+            if output_path.is_dir():
+                output_path = output_path / input_path.with_suffix(".txt").name
+            elif not output_path.suffix:
+                output_path = output_path.with_suffix(".txt")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        output_path.write_text(text, encoding="utf-8")
+        if self.config.get("debug"):
+            print(f"Распознано ({len(segments)} сегм., {info.duration:.1f}с):")
+            print(text)
+        print(f"Сохранено в: {output_path}")
 
     def _set_indicator(self, text):
         sys.stdout.write("\r\033[K[" + text + "]\n")

@@ -60,10 +60,26 @@ def main():
         help="Путь к аудиофайлу для транскрипции вместо записи с микрофона.",
     )
     parser.add_argument(
+        "--video",
+        default=None,
+        help="Путь к видеофайлу для транскрипции (нужен extra: pip install -e .[video]).",
+    )
+    parser.add_argument(
         "--output",
         default=None,
         help="Путь сохранения расшифровки. Без --output сохраняется .txt рядом "
-        "с аудиофайлом. Можно указать файл или директорию.",
+        "с файлом. Можно указать файл или директорию.",
+    )
+    parser.add_argument(
+        "--no-timeline",
+        action="store_true",
+        help="Не добавлять таймлайны к расшифровке (по умолчанию для --video "
+        "таймлайны включены, для --file выключены).",
+    )
+    parser.add_argument(
+        "--timeline",
+        action="store_true",
+        help="Добавить таймлайны к расшифровке --file.",
     )
     parser.add_argument(
         "--debug",
@@ -89,7 +105,13 @@ def main():
     app = VoiceInputApp(config)
 
     if args.file:
-        app.transcribe_file(args.file, args.output)
+        app.transcribe_file(args.file, args.output, with_timeline=args.timeline)
+        return
+
+    if args.video:
+        app.transcribe_video(
+            args.video, args.output, with_timeline=not args.no_timeline
+        )
         return
 
     use_menubar = sys.platform == "darwin" and not args.no_menubar
