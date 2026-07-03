@@ -269,13 +269,15 @@ class VoiceInputApp:
                 pass
             self.stream = None
         if not chunks:
-            print("Предупреждение: ничего не записано.", file=sys.stderr)
+            if self.config.get("debug"):
+                print("Предупреждение: ничего не записано.", file=sys.stderr)
             return
         self._set_indicator("● СТОП")
         audio = np.concatenate(chunks, axis=0).flatten().astype(np.float32)
         duration = len(audio) / self.config["sample_rate"]
         peak = float(np.max(np.abs(audio))) if len(audio) else 0.0
-        print(f"Записано {duration:.2f}с аудио (peak={peak:.4f}).", file=sys.stderr)
+        if self.config.get("debug"):
+            print(f"Записано {duration:.2f}с аудио (peak={peak:.4f}).", file=sys.stderr)
         if peak < 0.01:
             print(
                 "Аудио тихое/пустое. Проверьте разрешение на микрофон:\n"
@@ -312,11 +314,13 @@ class VoiceInputApp:
                 text = "".join(seg.text for seg in segments).strip()
 
             if not text:
-                print("Транскрипция пуста.", file=sys.stderr)
+                if self.config.get("debug"):
+                    print("Транскрипция пуста.", file=sys.stderr)
                 if self.on_state_change:
                     self.on_state_change("idle")
                 return
-            print(f"Распознано: {text}")
+            if self.config.get("debug"):
+                print(f"Распознано: {text}")
             try:
                 self.typer.type(text)
             except Exception as e:

@@ -65,6 +65,11 @@ def main():
         help="Путь сохранения расшифровки. Без --output сохраняется .txt рядом "
         "с аудиофайлом. Можно указать файл или директорию.",
     )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Печатать распознанный текст и диагностические сообщения в консоль.",
+    )
     args = parser.parse_args()
 
     config = dict(CONFIG)
@@ -78,6 +83,8 @@ def main():
         config["min_speakers"] = args.min_speakers
     if args.max_speakers is not None:
         config["max_speakers"] = args.max_speakers
+    if args.debug:
+        config["debug"] = True
 
     app = VoiceInputApp(config)
 
