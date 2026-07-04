@@ -109,6 +109,28 @@ pip install librosa
 - `diarize` — включить разделение спикеров, по умолчанию `False`.
 - `min_speakers` / `max_speakers` — границы числа спикеров для диаризации (1 и 4).
 
+## Удалённый запуск (SSH + PulseAudio)
+Запускайте voiceinput на удалённом сервере, используя микрофон клиента через SSH-туннель.
+
+**Клиент (macOS):**
+```bash
+brew install pulseaudio
+# Запуск PulseAudio с TCP-поддержкой:
+pulseaudio --load="module-native-protocol-tcp auth-ip-acl=127.0.0.1" --exit-idle-time=-1
+# Подключение к серверу с пробросом PulseAudio:
+ssh -R 4713:localhost:4713 user@server
+```
+
+**Сервер (Linux):**
+```bash
+sudo apt install pulseaudio    # PulseAudio клиент
+# Проверить микрофон клиента:
+PULSE_SERVER=tcp:localhost:4713 pactl list sources short
+# Запустить voiceinput:
+PULSE_SERVER=tcp:localhost:4713 voiceinput --model=base --language=ru
+```
+PortAudio автоматически подхватывает `PULSE_SERVER` — код менять не нужно.
+
 ## Запуск
 ```bash
 voiceinput
